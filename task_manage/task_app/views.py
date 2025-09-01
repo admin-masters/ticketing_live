@@ -1218,103 +1218,97 @@ def general_manage_users(request):
     }
     
     return render(request, 'tasks/general_manage_users.html', context)
-
+from urllib.parse import unquote
 def get_user_by_email(email):
     """Helper function to get user by email"""
     try:
         return User.objects.filter(email=email).first()
     except User.DoesNotExist:
         return None
-from django.views.decorators.csrf import csrf_exempt
 
-@require_http_methods(["POST"])
-def api_create_task(request):
+@require_http_methods(["GET"])
+def api_create_task(request, assigned_by_email, assigned_to_email, deadline, ticket_type, priority, department, subject, request_details):
     """
-    API endpoint to create a new task
-    Expected JSON payload:
-    {
-        "assigned_by_email": "creator@example.com",
-        "assigned_to_email": "assignee@example.com", (optional)
-        "deadline": "2024-12-31", (YYYY-MM-DD format)
-        "ticket_type": "Bug|Feature|Support",
-        "priority": "Low|Medium|High|Critical",
-        "department": "department_name",
-        "subject": "Task subject",
-        "request_details": "Detailed description",
-        "status": "Open|In Progress|Resolved|Closed", (optional, defaults to Open)
-        "is_recurring": false, (optional)
-        "recurrence_type": "Daily|Weekly|Monthly", (optional)
-        "recurrence_count": 5, (optional)
-        "recurrence_duration": 30 (optional)
-    }
+    Create task via GET request with URL parameters
+    URL Format: /api/create-task/{assigned_by_email}/{assigned_to_email}/{deadline}/{ticket_type}/{priority}/{department}/{subject}/{request_details}/
+    
+    Example: /api/create-task/sanyam.jain@inditech.co.in/khushan.poptani@inditech.co.in/2024-12-31/Issues/High/IT/Server-Down/Server-not-responding/
+    
+    Optional parameters via query string:
+    - status (default: Open)
+    - is_recurring (default: false)
+    - recurrence_type 
+    - recurrence_count
+    - recurrence_duration
     """
     try:
-        # Parse JSON data
-        try:
-            data = json.loads(request.body)
-        except json.JSONDecodeError:
-            return JsonResponse({
-                'error': 'Invalid JSON format',
-                'success': False
-            }, status=400)
-
-        # Validate required fields
-        required_fields = ['assigned_by_email', 'subject', 'request_details']
-        missing_fields = [field for field in required_fields if not data.get(field)]
-        
-        if missing_fields:
-            return JsonResponse({
-                'error': f'Missing required fields: {", ".join(missing_fields)}',
-                'success': False
-            }, status=400)
+        # Decode URL parameters (in case of special characters)
+        assigned_by_email = unquote(assigned_by_email)
+        assigned_to_email = unquote(assigned_to_email) if assigned_to_email.lower() != 'none' else None
+        deadline = unquote(deadline) if deadline.lower() != 'none' else None
+        ticket_type = unquote(ticket_type)
+        priority = unquote(priority)
+        department = unquote(department) if department.lower() != 'none' else None
+        subject = unquote(subject).replace('-', ' ')  # Convert hyphens back to spaces
+        request_details = unquote(request_details).replace('-', ' ')
 
         # Get users by email
-        assigned_by_user = get_user_by_email(data['assigned_by_email'])
+        assigned_by_user = get_user_by_email(assigned_by_email)
         if not assigned_by_user:
             return JsonResponse({
-                'error': f'User with email {data["assigned_by_email"]} not found',
+                'error': f'User with email {assigned_by_email} not found',
                 'success': False
             }, status=404)
 
         assigned_to_user = None
-        if data.get('assigned_to_email'):
-            assigned_to_user = get_user_by_email(data['assigned_to_email'])
+        if assigned_to_email:
+            assigned_to_user = get_user_by_email(assigned_to_email)
             if not assigned_to_user:
                 return JsonResponse({
-                    'error': f'Assignee with email {data["assigned_to_email"]} not found',
+                    'error': f'Assignee with email {assigned_to_email} not found',
                     'success': False
                 }, status=404)
 
         # Parse deadline
-        deadline = None
-        if data.get('deadline'):
-            deadline = parse_date(data['deadline'])
-            if not deadline:
+        parsed_deadline = None
+        if deadline:
+            from django.utils.dateparse import parse_date
+            parsed_deadline = parse_date(deadline)
+            if not parsed_deadline:
                 return JsonResponse({
                     'error': 'Invalid deadline format. Use YYYY-MM-DD',
                     'success': False
                 }, status=400)
 
+        # Get optional parameters from query string
+        status = request.GET.get('status', 'Not Started')
+        is_recurring = request.GET.get('is_recurring', 'false').lower() == 'true'
+        recurrence_type = request.GET.get('recurrence_type', '') if is_recurring else ''
+        recurrence_count = int(request.GET.get('recurrence_count', 0)) if is_recurring else 0
+        recurrence_duration = int(request.GET.get('recurrence_duration', 0)) if is_recurring else 0
+
         # Create task
+        from datetime import date
         task = Task(
             assigned_by=assigned_by_user,
             assigned_to=assigned_to_user,
             assigned_date=date.today(),
-            deadline=deadline,
-            ticket_type=data.get('ticket_type', ''),
-            priority=data.get('priority', 'Medium'),
-            department_id=data.get('department') if data.get('department') else None,
-            subject=data['subject'],
-            request_details=data['request_details'],
-            status=data.get('status', 'Open'),
-            is_recurring=data.get('is_recurring', False),
-            recurrence_type=data.get('recurrence_type', '') if data.get('is_recurring') else '',
-            recurrence_count=data.get('recurrence_count', 0) if data.get('is_recurring') else 0,
-            recurrence_duration=data.get('recurrence_duration', 0) if data.get('is_recurring') else 0
+            deadline=parsed_deadline,
+            ticket_type=ticket_type,
+            priority=priority,
+            department_id=department if department else None,
+            subject=subject,
+            request_details=request_details,
+            status=status,
+            is_recurring=is_recurring,
+            recurrence_type=recurrence_type,
+            recurrence_count=recurrence_count,
+            recurrence_duration=recurrence_duration
         )
 
         # Validate and save
         try:
+            from django.core.exceptions import ValidationError
             task.full_clean()
             task.save()
         except ValidationError as e:
@@ -1324,11 +1318,10 @@ def api_create_task(request):
                 'success': False
             }, status=400)
 
-        # Send email notifications (similar to your existing logic)
+        # Send email notifications (reusing your existing logic)
         try:
-            # Notify assignee if assigned
             if task.assigned_to:
-                view_ticket_url = f'/tasks/detail/{task.task_id}/'  # Adjust URL as needed
+                view_ticket_url = f'/tasks/detail/{task.task_id}/'
                 context = {
                     'user': task.assigned_to,
                     'ticket': task,
@@ -1355,20 +1348,6 @@ def api_create_task(request):
                 recipient_email=task.assigned_by.email,
             )
 
-            # Notify department manager if exists
-            if task.department and hasattr(task.department, 'manager') and task.department.manager:
-                context = {
-                    'user': task.department.manager,
-                    'ticket': task,
-                    'view_ticket_url': view_ticket_url,
-                }
-                send_email_notification(
-                    subject="New Task Created in Your Department",
-                    template_name='emails/ticket_created.html',
-                    context=context,
-                    recipient_email=task.department.manager.email,
-                )
-
         except Exception as e:
             logger.warning(f"Failed to send email notifications for task {task.task_id}: {str(e)}")
 
@@ -1378,15 +1357,16 @@ def api_create_task(request):
                 action='created',
                 user=assigned_by_user,
                 task=task,
-                description=f"Task {task.task_id} created by {assigned_by_user.username} for {task.assigned_to.username if task.assigned_to else 'Unassigned'}"
+                description=f"Task {task.task_id} created by {assigned_by_user.username} via GET API"
             )
         except Exception as e:
             logger.warning(f"Failed to log activity for task {task.task_id}: {str(e)}")
 
         return JsonResponse({
-            'message': 'Task created successfully!',
+            'message': 'Task created successfully via GET!',
             'task_id': task.task_id,
-            'success': True
+            'success': True,
+            'redirect_url': f'/tasks/detail/{task.task_id}/'  # Optional redirect
         }, status=201)
 
     except Exception as e:
@@ -1397,19 +1377,23 @@ def api_create_task(request):
         }, status=500)
 
 
-@require_http_methods(["PUT", "PATCH"])
-def api_update_task(request, task_id):
+@require_http_methods(["GET"])
+def api_update_task(request, task_id, updated_by_email, status=None, revised_deadline=None):
     """
-    API endpoint to update task status (matches your existing update_task_status functionality)
-    Expected JSON payload:
-    {
-        "updated_by_email": "updater@example.com",
-        "status": "Open|In Progress|Resolved|Closed", (optional)
-        "comments_by_assignee": "Status update comment", (optional)
-        "revised_completion_date": "2024-12-31" (optional, YYYY-MM-DD format)
-    }
+    Update task via GET request
+    URL Format: /api/update-task/{task_id}/{updated_by_email}/{status}/{revised_deadline}/
+    
+    Example: /api/update-task/12345/sanyam.jain@inditech.co.in/In-Progress/2024-12-31/
+    
+    Optional parameters via query string:
+    - comments_by_assignee
     """
     try:
+        # Decode parameters
+        updated_by_email = unquote(updated_by_email)
+        status = unquote(status) if status and status.lower() != 'none' else None
+        revised_deadline = unquote(revised_deadline) if revised_deadline and revised_deadline.lower() != 'none' else None
+        
         # Get task
         try:
             task = Task.objects.get(task_id=task_id)
@@ -1419,64 +1403,43 @@ def api_update_task(request, task_id):
                 'success': False
             }, status=404)
 
-        # Parse JSON data
-        try:
-            data = json.loads(request.body)
-        except json.JSONDecodeError:
-            return JsonResponse({
-                'error': 'Invalid JSON format',
-                'success': False
-            }, status=400)
-
-        # Validate updated_by_email
-        if not data.get('updated_by_email'):
-            return JsonResponse({
-                'error': 'updated_by_email is required',
-                'success': False
-            }, status=400)
-
-        updated_by_user = get_user_by_email(data['updated_by_email'])
+        # Get user
+        updated_by_user = get_user_by_email(updated_by_email)
         if not updated_by_user:
             return JsonResponse({
-                'error': f'User with email {data["updated_by_email"]} not found',
+                'error': f'User with email {updated_by_email} not found',
                 'success': False
             }, status=404)
 
-        # Store original values for comparison (matching your existing logic)
-        old_deadline = task.revised_completion_date
-        old_comments = task.comments_by_assignee
-        initial_deadline = task.deadline
+        # Store original values
         old_status = task.status
-
+        old_deadline = task.revised_completion_date
         changes_made = []
 
-        # Update status if provided
-        if 'status' in data:
-            new_status = data['status']
-            if old_status != new_status:
-                task.status = new_status
-                changes_made.append(f"status: {old_status} -> {new_status}")
+        # Update status
+        if status and status.replace('-', ' ') != old_status:
+            task.status = status.replace('-', ' ')
+            changes_made.append(f"status: {old_status} -> {task.status}")
 
-
-        # Update comments if provided
-        if 'comments_by_assignee' in data:
-            new_comments = data['comments_by_assignee']
-            if old_comments != new_comments:
-                task.comments_by_assignee = new_comments
-                changes_made.append(f"comments updated")
-
-        # Update revised completion date if provided
-        if 'revised_completion_date' in data and data['revised_completion_date']:
-            parsed_date = parse_date(data['revised_completion_date'])
+        # Update revised deadline
+        if revised_deadline:
+            from django.utils.dateparse import parse_date
+            parsed_date = parse_date(revised_deadline)
             if not parsed_date:
                 return JsonResponse({
-                    'error': 'Invalid revised_completion_date format. Use YYYY-MM-DD',
+                    'error': 'Invalid revised_deadline format. Use YYYY-MM-DD',
                     'success': False
                 }, status=400)
             
             if old_deadline != parsed_date:
                 task.revised_completion_date = parsed_date
-                changes_made.append(f"revised_completion_date: {old_deadline} -> {parsed_date}")
+                changes_made.append(f"revised_deadline: {old_deadline} -> {parsed_date}")
+
+        # Update comments from query parameter
+        comments = request.GET.get('comments_by_assignee')
+        if comments and comments != task.comments_by_assignee:
+            task.comments_by_assignee = comments
+            changes_made.append("comments updated")
 
         if not changes_made:
             return JsonResponse({
@@ -1485,100 +1448,39 @@ def api_update_task(request, task_id):
                 'success': True
             })
 
-        # Save the task
-        try:
-            task.save()
-        except Exception as e:
-            return JsonResponse({
-                'error': f'Failed to save task: {str(e)}',
-                'success': False
-            }, status=500)
+        # Save task
+        task.save()
 
-        # Send notifications based on what changed (matching your existing logic)
+        # Send notifications (reusing your existing logic)
         try:
             view_ticket_url = f'/tasks/detail/{task.task_id}/'
-
-            # Notify about deadline revision if needed
-            if old_deadline != task.revised_completion_date:
-                context = {
-                    'ticket': task,
-                    'view_ticket_url': view_ticket_url,
-                }
-                # Notify creator
+            
+            if old_status != task.status:
+                context = {'ticket': task, 'view_ticket_url': view_ticket_url}
                 send_email_notification(
-                    subject=f"Deadline Revised: {task.task_id}",
-                    template_name='emails/ticket_deadline_updated.html',
+                    subject=f"Task Status Updated: {task.task_id}",
+                    template_name='emails/ticket_status_updated.html',
                     context=context,
                     recipient_email=task.assigned_by.email,
                 )
-                # Notify assignee if exists
-                if task.assigned_to:
-                    send_email_notification(
-                        subject=f"Deadline Revised: {task.task_id}",
-                        template_name='emails/ticket_deadline_updated.html',
-                        context=context,
-                        recipient_email=task.assigned_to.email,
-                    )
-
-            # Notify about comment updates if needed
-            if old_comments != task.comments_by_assignee:
-                context = {
-                    'ticket': task,
-                    'view_ticket_url': view_ticket_url,
-                }
-                # Notify creator
-                send_email_notification(
-                    subject=f"Comment Updated: {task.task_id}",
-                    template_name='emails/ticket_comment_updated.html',
-                    context=context,
-                    recipient_email=task.assigned_by.email,
-                )
-                # Notify assignee if exists
-                if task.assigned_to:
-                    send_email_notification(
-                        subject=f"Comment Updated: {task.task_id}",
-                        template_name='emails/ticket_comment_updated.html',
-                        context=context,
-                        recipient_email=task.assigned_to.email,
-                    )
 
         except Exception as e:
-            logger.warning(f"Failed to send email notifications for task {task.task_id}: {str(e)}")
+            logger.warning(f"Failed to send email notifications: {str(e)}")
 
-        # Create activity logs (matching your existing logic)
+        # Log activity
         try:
-            # Log status update if needed
             if old_status != task.status:
                 ActivityLog.objects.create(
                     action='status_updated',
                     user=updated_by_user,
                     task=task,
-                    description=f"Status changed from '{old_status}' to '{task.status}'"
+                    description=f"Status changed via GET API from '{old_status}' to '{task.status}'"
                 )
-
-            # Log deadline revision if needed
-            if old_deadline != task.revised_completion_date:
-                ActivityLog.objects.create(
-                    action='deadline_revised',
-                    user=updated_by_user,
-                    task=task,
-                    description=f"Deadline revised from {initial_deadline} to {task.revised_completion_date}"
-                )
-
-            # Log comment addition if needed
-            if old_comments != task.comments_by_assignee:
-                ActivityLog.objects.create(
-                    action='comment_added',
-                    user=updated_by_user,
-                    task=task,
-                    description=f"Comment added or updated by assignee: {task.comments_by_assignee}"
-                )
-
         except Exception as e:
-            logger.warning(f"Failed to log activity for task {task.task_id}: {str(e)}")
+            logger.warning(f"Failed to log activity: {str(e)}")
 
         return JsonResponse({
-            'message': 'Task updated successfully!',
+            'message': 'Task updated successfully via GET!',
             'task_id': task.task_id,
             'changes_made': changes_made,
             'success': True
@@ -1592,21 +1494,21 @@ def api_update_task(request, task_id):
         }, status=500)
 
 
-@require_http_methods(["PUT", "PATCH"])
-def api_reassign_task(request, task_id):
+@require_http_methods(["GET"])
+def api_reassign_task(request, task_id, reassigned_by_email):
     """
-    API endpoint to reassign a task back to creator (matches your existing reassign logic)
-    Expected JSON payload:
-    {
-        "reassigned_by_email": "reassigner@example.com",
-        "note": "Reason for reassignment/note", (optional)
-        "attachment_base64": "base64_encoded_file_content", (optional)
-        "attachment_filename": "filename.pdf" (optional, required if attachment_base64 provided)
-    }
+    Reassign task via GET request
+    URL Format: /api/reassign-task/{task_id}/{reassigned_by_email}/
     
-    Note: This API follows your existing business logic where tasks are reassigned back to the creator
+    Example: /api/reassign-task/12345/sanyam.jain@inditech.co.in/
+    
+    Optional parameters via query string:
+    - note
     """
     try:
+        # Decode parameters
+        reassigned_by_email = unquote(reassigned_by_email)
+        
         # Get task
         try:
             task = Task.objects.get(task_id=task_id)
@@ -1616,69 +1518,32 @@ def api_reassign_task(request, task_id):
                 'success': False
             }, status=404)
 
-        # Parse JSON data
-        try:
-            data = json.loads(request.body)
-        except json.JSONDecodeError:
-            return JsonResponse({
-                'error': 'Invalid JSON format',
-                'success': False
-            }, status=400)
-
-        # Validate required fields
-        if not data.get('reassigned_by_email'):
-            return JsonResponse({
-                'error': 'reassigned_by_email is required',
-                'success': False
-            }, status=400)
-
-        # Get user by email
-        reassigned_by_user = get_user_by_email(data['reassigned_by_email'])
+        # Get user
+        reassigned_by_user = get_user_by_email(reassigned_by_email)
         if not reassigned_by_user:
             return JsonResponse({
-                'error': f'User with email {data["reassigned_by_email"]} not found',
+                'error': f'User with email {reassigned_by_email} not found',
                 'success': False
             }, status=404)
 
-        # Store original assignee for logging
+        # Store original assignee
         old_assignee = task.assigned_to
         old_assignee_name = old_assignee.username if old_assignee else 'Unassigned'
 
-        # Handle note if provided
-        note = data.get('note', '')
+        # Handle note from query parameter
+        note = request.GET.get('note', '')
         if note:
             task.notes = note
 
-        # Handle file attachment if provided
-        if data.get('attachment_base64') and data.get('attachment_filename'):
-            try:
-                import base64
-                from django.core.files.base import ContentFile
-                
-                # Decode base64 attachment
-                file_content = base64.b64decode(data['attachment_base64'])
-                file_name = data['attachment_filename']
-                
-                # Create Django file object
-                django_file = ContentFile(file_content, name=file_name)
-                task.attachment_by_assignee = django_file
-                
-            except Exception as e:
-                return JsonResponse({
-                    'error': f'Failed to process attachment: {str(e)}',
-                    'success': False
-                }, status=400)
-
-        # Following your existing logic: reassign back to creator
+        # Reassign back to creator (following your existing logic)
         from_dept = task.assigned_by.userprofile.department
-        task.assigned_to = task.assigned_by  # Reassign to creator
+        task.assigned_to = task.assigned_by
         task.department = from_dept
         task.save()
 
-        # Get the new assignee (which is the creator in your logic)
         new_assignee = task.assigned_by
 
-        # Send notification email to the new assignee (creator)
+        # Send notifications (reusing your existing logic)
         try:
             view_ticket_url = f'/tasks/detail/{task.task_id}/'
             context = {
@@ -1689,51 +1554,42 @@ def api_reassign_task(request, task_id):
 
             if new_assignee.email:
                 send_email_notification(
-                    subject="You Have Been Re-Assigned a New Task",
+                    subject="You Have Been Re-Assigned a Task",
                     template_name='emails/ticket_reassigned.html',
                     context=context,
                     recipient_email=new_assignee.email,
                 )
 
         except Exception as e:
-            logger.warning(f"Failed to send email notifications for task {task.task_id}: {str(e)}")
+            logger.warning(f"Failed to send email notifications: {str(e)}")
 
-        # Create activity logs (matching your existing logic)
+        # Log activity
         try:
-            # Log the reassignment
             ActivityLog.objects.create(
                 action='reassigned',
                 user=reassigned_by_user,
                 task=task,
-                description=f"Task reassigned from {old_assignee_name} to {new_assignee.username}"
+                description=f"Task reassigned via GET API from {old_assignee_name} to {new_assignee.username}"
             )
 
-            # Log the note addition if provided
             if note:
                 ActivityLog.objects.create(
                     action='comment_added',
                     user=reassigned_by_user,
                     task=task,
-                    description=f"Note added by {reassigned_by_user.username}: {note}"
+                    description=f"Note added via GET API: {note}"
                 )
 
         except Exception as e:
-            logger.warning(f"Failed to log activity for task {task.task_id}: {str(e)}")
+            logger.warning(f"Failed to log activity: {str(e)}")
 
-        response_data = {
-            'message': 'Task reassigned successfully!',
+        return JsonResponse({
+            'message': 'Task reassigned successfully via GET!',
             'task_id': task.task_id,
             'previous_assignee': old_assignee_name,
             'new_assignee': new_assignee.username,
             'success': True
-        }
-
-        # Add attachment info to response if attachment was processed
-        if data.get('attachment_base64'):
-            response_data['attachment_processed'] = True
-            response_data['attachment_filename'] = data.get('attachment_filename')
-
-        return JsonResponse(response_data)
+        })
 
     except Exception as e:
         logger.error(f"Unexpected error in api_reassign_task: {str(e)}")
@@ -1741,4 +1597,3 @@ def api_reassign_task(request, task_id):
             'error': 'Internal server error',
             'success': False
         }, status=500)
-
