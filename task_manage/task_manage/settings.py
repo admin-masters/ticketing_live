@@ -28,6 +28,12 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://support.inditech.co.in",
+    "http://support.inditech.co.in"
+]
+
+
 
 # Application definition
 
@@ -81,14 +87,31 @@ WSGI_APPLICATION = 'task_manage.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',  # Use MySQL database engine
-        'NAME': 'ticketing_new2',  # The name of your MySQL database
+        'NAME': 'ticketing_new',  # The name of your MySQL database
         'USER': 'root',  # Your MySQL username
-        'PASSWORD': 'Jain@2514',  # Your MySQL password
+        'PASSWORD': 'h1lG8Uni493H9',  # Your MySQL password
         'HOST': 'localhost',  # Or the IP address of your MySQL server
         'PORT': '3306',  # Default MySQL port
     }
 }
 
+DATABASES["default"]["CONN_MAX_AGE"] = 60        # seconds
+DATABASES["default"]["OPTIONS"] = {"charset": "utf8mb4"}
+
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "file": {
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "filename": "/var/log/django/app.log",
+            "when": "midnight",
+            "backupCount": 14,
+        },
+    },
+    "root": {"handlers": ["file"], "level": "INFO"},
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
@@ -137,5 +160,5 @@ EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_USE_SSL = False
 EMAIL_HOST_USER = 'adminfreshdesk@inditech.co.in'
-EMAIL_HOST_PASSWORD = 'uuxa olpm okkw gfuh'
+EMAIL_HOST_PASSWORD = 'qgwh esva mwaj avgm'
 DEFAULT_FROM_EMAIL = 'no-reply@yourdomain.com'
