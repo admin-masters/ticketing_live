@@ -35,17 +35,17 @@ urlpatterns = [
     path('manage_users/', views.manage_users, name='manage_users'),
     path('users/', views.general_manage_users, name='general_manage_users'),
      path('api/create-task/<str:assigned_by_email>/<str:assigned_to_email>/<str:deadline>/<str:ticket_type>/<str:priority>/<str:department>/<str:subject>/<str:request_details>/', 
-         views.api_create_task, name='api_create_task_get'),
+         views.api_create_task, name=''),
     path('api/update-task/<str:task_id>/<str:updated_by_email>/', 
-         views.api_update_task, name='api_update_task_get'),
+         views.api_update_task, name=''),
     path('api/update-task/<str:task_id>/<str:updated_by_email>/<str:status>/', 
-         views.api_update_task, name='api_update_task_get_with_status'),
+         views.api_update_task, name=''),
     path('api/update-task/<str:task_id>/<str:updated_by_email>/<str:status>/<str:revised_deadline>/', 
          views.api_update_task, name=''),
     
     # GET-based Task Reassignment API
     path('api/reassign-task/<str:task_id>/<str:reassigned_by_email>/', 
-         views.api_reassign_task, name='api_reassign_task_get'),
+         views.api_reassign_task, name=''),
 
 
 ]
