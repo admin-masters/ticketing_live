@@ -1456,7 +1456,7 @@ def api_update_task(request, task_id):
             if old_status != new_status:
                 task.status = new_status
                 changes_made.append(f"status: {old_status} -> {new_status}")
-                task.assigned_to = task.assigned_by
+
 
         # Update comments if provided
         if 'comments_by_assignee' in data:
