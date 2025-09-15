@@ -1377,13 +1377,24 @@ def api_create_task(request, assigned_by_email, assigned_to_email, deadline, tic
         }, status=500)
 
 
+
+from django.http import JsonResponse
+from django.views.decorators.http import require_http_methods
+from urllib.parse import unquote
+from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
+
 @require_http_methods(["GET"])
-def api_update_task(request, task_id, updated_by_email, status=None, revised_deadline=None):
+def api_update_task(request, task_id, updated_by_email, status=None, revised_deadline=None, subject=None, request_details=None):
     """
-    Update task via GET request
-    URL Format: /api/update-task/{task_id}/{updated_by_email}/{status}/{revised_deadline}/
+    Update task via GET request with optional subject and request details
+    URL Format 1: /api/update-task/{task_id}/{updated_by_email}/{status}/{revised_deadline}/
+    URL Format 2: /api/update-task/{task_id}/{updated_by_email}/{status}/{revised_deadline}/{subject}/{request_details}/
     
-    Example: /api/update-task/12345/sanyam.jain@inditech.co.in/In-Progress/2024-12-31/
+    Example 1: /api/update-task/TEC-K0QCMM/user@inditech.co.in/In%20Progress/2025-09-04/
+    Example 2: /api/update-task/TEC-K0QCMM/user@inditech.co.in/In%20Progress/2025-09-04/Fix-login/Password-issue/
     
     Optional parameters via query string:
     - comments_by_assignee
@@ -1393,6 +1404,8 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
         updated_by_email = unquote(updated_by_email)
         status = unquote(status) if status and status.lower() != 'none' else None
         revised_deadline = unquote(revised_deadline) if revised_deadline and revised_deadline.lower() != 'none' else None
+        subject = unquote(subject) if subject and subject.lower() != 'none' else None
+        request_details = unquote(request_details) if request_details and request_details.lower() != 'none' else None
         
         # Get task
         try:
@@ -1411,6 +1424,16 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
                 'success': False
             }, status=404)
 
+        # Authorization check
+        is_creator = task.assigned_by == updated_by_user
+        is_assignee = task.assigned_to == updated_by_user
+        
+        if not (is_creator or is_assignee):
+            return JsonResponse({
+                'error': 'Unauthorized: You can only update tasks you created or are assigned to',
+                'success': False
+            }, status=403)
+
         # Store original values
         old_status = task.status
         old_deadline = task.revised_completion_date
@@ -1420,6 +1443,12 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
         if status and status.replace('-', ' ') != old_status:
             task.status = status.replace('-', ' ')
             changes_made.append(f"status: {old_status} -> {task.status}")
+        if subject and subject.replace('-', ' ') != task.subject:
+            task.subject = subject.replace('-', ' ')
+            changes_made.append("subject updated")
+        if request_details and request_details.replace('-', ' ') != task.request_details:
+            task.request_details = request_details.replace('-', ' ')    
+            changes_made.append("request_details updated")
 
         # Update revised deadline
         if revised_deadline:
@@ -1440,6 +1469,21 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
         if comments and comments != task.comments_by_assignee:
             task.comments_by_assignee = comments
             changes_made.append("comments updated")
+        # Handle subject and request_details updates
+        if subject or request_details:
+            # Create update message in the specified format
+            update_message = ""
+            current_date = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            if subject:
+                update_message += f"Update Subject: {subject}\n"
+            
+            update_message += f"Update date: {current_date}\n"
+            
+            if request_details:
+                update_message += f"Update details: {request_details}\n"
+            
+            changes_made.append("subject/details updated via API")
 
         if not changes_made:
             return JsonResponse({
@@ -1451,17 +1495,32 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
         # Save task
         task.save()
 
-        # Send notifications (reusing your existing logic)
+        # Send notifications based on who updated the task
         try:
             view_ticket_url = f'/tasks/detail/{task.task_id}/'
+            context = {'ticket': task, 'view_ticket_url': view_ticket_url}
             
-            if old_status != task.status:
-                context = {'ticket': task, 'view_ticket_url': view_ticket_url}
+            # Determine email recipient based on who made the update
+            recipient_email = None
+            email_subject = f"Task Updated: {task.task_id}"
+            
+            if is_creator:
+                # If creator updated, send email to assignee
+                if task.assigned_to and task.assigned_to.email:
+                    recipient_email = task.assigned_to.email
+                    email_subject = f"Task Updated by Creator: {task.task_id}"
+            elif is_assignee:
+                # If assignee updated, send email to creator
+                if task.assigned_by and task.assigned_by.email:
+                    recipient_email = task.assigned_by.email
+                    email_subject = f"Task Updated by Assignee: {task.task_id}"
+            
+            if recipient_email:
                 send_email_notification(
-                    subject=f"Task Status Updated: {task.task_id}",
+                    subject=email_subject,
                     template_name='emails/ticket_status_updated.html',
                     context=context,
-                    recipient_email=task.assigned_by.email,
+                    recipient_email=recipient_email,
                 )
 
         except Exception as e:
@@ -1469,20 +1528,28 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
 
         # Log activity
         try:
+            activity_description = f"Task updated via GET API by {updated_by_user.email}"
             if old_status != task.status:
-                ActivityLog.objects.create(
-                    action='status_updated',
-                    user=updated_by_user,
-                    task=task,
-                    description=f"Status changed via GET API from '{old_status}' to '{task.status}'"
-                )
+                activity_description += f" - Status changed from '{old_status}' to '{task.status}'"
+            if subject:
+                activity_description += f" - Subject updated to '{subject}'"
+            if request_details:
+                activity_description += f" - Request details updated"
+                
+            ActivityLog.objects.create(
+                action='task_updated_api',
+                user=updated_by_user,
+                task=task,
+                description=activity_description
+            )
         except Exception as e:
             logger.warning(f"Failed to log activity: {str(e)}")
 
         return JsonResponse({
-            'message': 'Task updated successfully via GET!',
+            'message': 'Task updated successfully via GET API!',
             'task_id': task.task_id,
             'changes_made': changes_made,
+            'updated_by': updated_by_user.email,
             'success': True
         })
 
@@ -1492,7 +1559,6 @@ def api_update_task(request, task_id, updated_by_email, status=None, revised_dea
             'error': 'Internal server error',
             'success': False
         }, status=500)
-
 
 @require_http_methods(["GET"])
 def api_reassign_task(request, task_id, reassigned_by_email):
